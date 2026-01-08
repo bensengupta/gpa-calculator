@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UoG GPA Calculator</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            margin: 0 auto;
+            max-width: 600px;
+        }
+
+        .container {
+            flex: 1;
+            padding: 12px;
+        }
+
+        footer {
+            font-size: 0.9rem;
+            text-align: center;
+            padding: 12px;
+        }
+
+        table {
+            /* text should ellipsis after 1 line */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        #result-container {
+            border: 4px solid black;
+            padding: 0 12px;
+            margin-top: 16px;
+            font-size: 1.2rem;
+        }
+
+        #result-container:empty {
+            display: none;
+        }
+
+        @media (max-width: 600px) {
+            table {
+                font-size: 0.8rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>University of Guelph GPA Calculator</h1>
+
+        <label for="transcriptFile">Select your unofficial transcript (PDF only):</label>
+        <input type="file" id="transcriptFile" accept=".pdf" required>
+
+        <div id="result-container"></div>
+
+        <div id="course-table-container"></div>
+    </div>
+
+    <footer>
+        <span>
+            Developed by <a href="https://github.com/bensengupta">Benjamin Sengupta</a>.
+            View on <a href="https://github.com/bensengupta/gpa-calculator">GitHub</a>.
+        </span>
+    </footer>
+
+    <script type="module">
+        import {
+            PDFParse
+        } from 'https://cdn.jsdelivr.net/npm/pdf-parse@2.4.5/dist/pdf-parse/web/pdf-parse.es.js';
+
+        PDFParse.setWorker('https://cdn.jsdelivr.net/npm/pdf-parse@2.4.5/dist/pdf-parse/web/pdf.worker.mjs');
+
+        /**
+         * Asserts that a condition is true.
+         * @param {unknown} cond
+         * @param {string} msg
+         * @returns {asserts cond}
+         */
+        function assert(cond, msg = 'Assertion failed') {
+            if (!cond) throw new Error(msg);
+        }
+
+        async function parseTranscriptFile(file) {
+            assert(file instanceof File);
+
+            const fileData = await file.arrayBuffer();
+            const parser = new PDFParse({data: fileData});
+            /** @type {{ text: string }} */
+            const result = await parser.getText();
+
+            assert(
+                result.text.startsWith('Page: 1\n***UNOFFICIAL TRANSCRIPT***\n'),
+                "Not a valid transcript file"
+            );
+
+            /** @type {string[]} */
+            let lines = [];
+
+            let start = 0;
+            for (let i = 0; i < 1000; i++) {
+                const searchPattern =
+                    'Course/Section Title Grade Credit Term\n' +
+                    '-----------------------------------------------------------------------------\n';
+
+                const index = result.text.indexOf(searchPattern, start);
+                if (index === -1) {
+                    break;
+                }
+
+                start = index + searchPattern.length;
+
+                const end = Math.min(
+                    result.text.indexOf('\n\n', start),
+                    result.text.indexOf('\n-----------------------------------------------------------------------------\n', start),
+                );
+
+                lines.push(
+                    ...result.text.slice(start, end).split('\n')
+                );
+            }
+
+            const entries = lines.map(line => {
+                const parts = line.split(' ');
+
+                let code = parts.at(0);
+                let nameStart = 2;
+                let nameEnd = parts.length - 3;
+                let grade = parts.at(-3);
+                let weight = parts.at(-2);
+                let semester = parts.at(-1);
+
+                if (parts.at(-2) == 'CIP') {
+                    grade = 'CIP';
+                    weight = '';
+                    nameEnd += 1;
+                }
+
+                let name = parts.slice(nameStart, nameEnd).join(' ');
+
+                return {code, grade, weight, semester, name};
+            });
+
+            await parser.destroy();
+
+            return entries;
+        }
+
+        function createCourseTable(entries) {
+            const headerTitles = [
+                'Course Code',
+                'Course Name',
+                'Grade',
+                'Weight',
+                'Semester',
+            ];
+            const keys = [
+                'code',
+                'name',
+                'grade',
+                'weight',
+                'semester',
+            ];
+
+            const table = document.createElement('table');
+
+            const headerRow = document.createElement('tr');
+            for (const headerTitle of headerTitles) {
+                const th = document.createElement('th');
+                th.textContent = headerTitle;
+                headerRow.appendChild(th);
+            }
+            table.appendChild(headerRow);
+
+            for (const entry of entries) {
+                const row = document.createElement('tr');
+                for (const key of keys) {
+                    const td = document.createElement('td');
+                    td.textContent = entry[key];
+                    row.appendChild(td);
+                }
+                table.appendChild(row);
+            }
+
+            return table;
+        }
+
+        function gradePercentToGpa4(percent) {
+            if (percent >= 85) return 4.0;
+            if (percent >= 80) return 3.7;
+            if (percent >= 77) return 3.3;
+            if (percent >= 70) return 2.7;
+            if (percent >= 73) return 3.0;
+            if (percent >= 70) return 2.7;
+            if (percent >= 67) return 2.3;
+            if (percent >= 63) return 2.0;
+            if (percent >= 60) return 1.7;
+            if (percent >= 57) return 1.3;
+            if (percent >= 53) return 1.0;
+            if (percent >= 50) return 0.7;
+            return 0.0;
+        }
+
+        function calculateGpa(entries) {
+            let totalWeight = 0;
+            let gpa4Sum = 0;
+            let percentageSum = 0;
+
+            for (const entry of entries) {
+                const weight = parseFloat(entry.weight);
+                if (isNaN(weight)) {
+                    continue;
+                }
+
+                // numeric
+                if (/^\d+$/.test(entry.grade)) {
+                    const grade = parseInt(entry.grade);
+                    gpa4Sum += gradePercentToGpa4(grade) * weight;
+                    percentageSum += grade * weight;
+                    totalWeight += weight;
+                }
+            }
+
+            const gpa4 = gpa4Sum / totalWeight;
+            const percentage = percentageSum / totalWeight;
+            return [gpa4.toFixed(2), percentage.toFixed(3)];
+        }
+
+        async function onChangeTranscriptFile(event) {
+            const selectedFiles = event.target.files;
+            if (selectedFiles.length === 0) {
+                return;
+            }
+            const transcriptFile = selectedFiles[0];
+
+            const entries = await parseTranscriptFile(transcriptFile);
+
+            const resultContainer = document.getElementById('result-container');
+            assert(resultContainer);
+            const courseTableContainer = document.getElementById(
+                'course-table-container'
+            );
+            assert(courseTableContainer);
+
+            const [gpa4, percentage] = calculateGpa(entries);
+            resultContainer.innerHTML = `
+                <p>Percentage: <strong>${percentage}</strong> /100</p>
+                <p>4.0 GPA: <strong>${gpa4}</strong> /4</p>
+            `;
+
+            const courseTable = createCourseTable(entries);
+            courseTableContainer.innerHTML = '<h2>Course List</h2>';
+            courseTableContainer.appendChild(courseTable);
+        }
+
+
+        const transcriptFileInput = document.getElementById('transcriptFile');
+        assert(transcriptFileInput);
+        transcriptFileInput.addEventListener('change', onChangeTranscriptFile);
+    </script>
+</body>
+
+</html>
