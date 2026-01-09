@@ -240,10 +240,17 @@
             }
             const transcriptFile = selectedFiles[0];
 
-            const entries = await parseTranscriptFile(transcriptFile);
-
             const resultContainer = document.getElementById('result-container');
             assert(resultContainer);
+
+            let entries;
+            try {
+                entries = await parseTranscriptFile(transcriptFile);
+            } catch (e) {
+                resultContainer.innerHTML = `<p style="color: red;">Error: ${e.message}</p>`;
+                return;
+            }
+
             const courseTableContainer = document.getElementById(
                 'course-table-container'
             );
